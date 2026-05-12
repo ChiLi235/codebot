@@ -89,43 +89,115 @@ def clear_screen():
 
 @contextmanager
 def stream_response():
-    """Stream chunks inside a bounded rich Live region (never scrolls into
-    scrollback). On clean exit, Live clears its region (transient=True) and we
-    print the full Markdown render. On exception, Live still clears via
-    transient; we print raw text fallback.
+    """Stream markdown using the line-commit strategy from opencode.
 
-    Why this design: pure-ANSI cursor save/restore cannot erase content that
-    scrolled into terminal scrollback. Live keeps the stream view bounded
-    within the viewport using vertical_overflow='ellipsis', so the streamed
-    text never reaches scrollback and can be fully erased on exit.
+    How it works (per ui_stream_fix.md):
+    - Incoming chunks are appended to a line buffer
+    - When a newline arrives, the completed line is locked into scrollback as
+      rendered Markdown and removed from the buffer — it is NEVER redrawn
+    - The current partial (incomplete) line sits in a Rich Live region which
+      redraws only that one line in-place as plain text
+    - Code fences (``` blocks) are an exception: lines inside an open fence are
+      buffered until the closing ``` arrives, then the whole block is committed
+      at once as a single Markdown render
+    - On stream end, whatever remains in the buffer is flushed as Markdown
+
+    This avoids:
+    - Re-rendering growing text from scratch on every chunk (old bug → flicker)
+    - live.stop()/start() cycling (old bug → visual chaos)
+    - Raw text leaking to scrollback (old bug → duplication)
     """
-    buf: list[str] = []
-    state = {"text": ""}
+    line_buf = ""               # current partial line (not yet newline-terminated)
+    block_buf: list[str] = []   # lines buffered for multi-line blocks
+    in_fence = False             # inside a ``` code fence
+    in_table = False             # inside a markdown table
 
-    with Live(
+    live = Live(
         Text(""),
         console=console,
         refresh_per_second=15,
-        vertical_overflow="ellipsis",
+        vertical_overflow="visible",
         transient=True,
-        auto_refresh=True,
-    ) as live:
-        def write(chunk: str):
-            if not chunk:
-                return
-            buf.append(chunk)
-            state["text"] += chunk
-            live.update(Text(state["text"]))
+        auto_refresh=False,   # we call live.refresh() manually after each update
+    )
+    live.start()
 
-        try:
-            yield write
-        except BaseException:
-            raise
+    def _is_table_line(line: str) -> bool:
+        return line.strip().startswith("|")
 
-    # Live region has been cleared (transient=True). Print final markdown.
-    text = "".join(buf)
-    if text:
-        console.print(Markdown(text))
+    def _commit_block():
+        """Flush block_buf to scrollback as a single Markdown render."""
+        block = "\n".join(block_buf)
+        block_buf.clear()
+        if block.strip():
+            console.print(Markdown(block))
+
+    def _commit_line(line: str):
+        """Print one standalone line as rendered Markdown to scrollback."""
+        if line.strip():
+            console.print(Markdown(line))
+        else:
+            console.print()  # preserve blank lines
+
+    def write(chunk: str):
+        nonlocal line_buf, in_fence, in_table
+
+        for ch in chunk:
+            if ch == "\n":
+                completed = line_buf
+                line_buf = ""
+                stripped = completed.strip()
+
+                # ── inside a code fence ──────────────────────────────────────
+                if in_fence:
+                    block_buf.append(completed)
+                    if stripped.startswith("```"):
+                        in_fence = False
+                        _commit_block()
+
+                # ── inside a table ───────────────────────────────────────────
+                elif in_table:
+                    if _is_table_line(completed):
+                        block_buf.append(completed)   # keep buffering rows
+                    else:
+                        # table ended — commit the whole table, then this line
+                        in_table = False
+                        _commit_block()
+                        _commit_line(completed)
+
+                # ── normal context ───────────────────────────────────────────
+                else:
+                    if stripped.startswith("```"):
+                        in_fence = True
+                        block_buf.clear()
+                        block_buf.append(completed)
+                    elif _is_table_line(completed):
+                        in_table = True
+                        block_buf.clear()
+                        block_buf.append(completed)
+                    else:
+                        _commit_line(completed)
+
+                live.update(Text(""))
+                live.refresh()
+            else:
+                line_buf += ch
+                live.update(Text(line_buf))
+                live.refresh()
+
+    try:
+        yield write
+    except BaseException:
+        live.stop()
+        raise
+
+    live.stop()
+
+    # Flush anything remaining in the buffers
+    if line_buf:
+        block_buf.append(line_buf)
+    if block_buf:
+        _commit_block()
 
 
 def print_model_switched(model_key: str):
