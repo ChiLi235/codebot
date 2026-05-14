@@ -34,13 +34,14 @@ def _with_retry(fn, max_retries: int = 5):
             delay = min(delay * 2, 30)
 
 
-def converse(messages: list, tools: list, system: list, model_id: str) -> dict:
+def converse(messages: list, tools: list, system: list, model_id: str,
+             max_tokens: int | None = None) -> dict:
     client = _get_client()
     kwargs = dict(
         modelId=model_id,
         messages=messages,
         system=system,
-        inferenceConfig={"maxTokens": config.MAX_TOKENS},
+        inferenceConfig={"maxTokens": max_tokens or config.MAX_TOKENS},
     )
     if tools:
         kwargs["toolConfig"] = {"tools": tools}

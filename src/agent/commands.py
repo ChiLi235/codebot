@@ -1,8 +1,10 @@
 """Slash command registry. Add new commands by decorating with @register."""
+from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
 from agent import config, ui, session
+from agent.messages.types import AnyMessage
 
 
 @dataclass
@@ -11,7 +13,8 @@ class State:
     model_key: str
     model_id: str
     session_id: int = 1
-    messages: list = field(default_factory=list)
+    messages: list[AnyMessage] = field(default_factory=list)
+    decision_map: dict = field(default_factory=dict)
     force_subagent: bool = False
     force_subagent_model: str | None = None
 
@@ -89,17 +92,13 @@ def _cmd_checkout(args: str, state: State):
         return
     target = int(args)
     if not session.session_path(target).exists():
-        ui.print_error(f"session-{target}.json not found. Try /sessions.")
+        ui.print_error(f"session-{target} not found. Try /sessions.")
         return
 
-    # save current before swap
-    if state.messages:
-        session.save(state.session_id, state.messages, state.model_key)
-
-    data = session.load(target)
+    msgs = session.load(target)
     state.session_id = target
     state.messages.clear()
-    state.messages.extend(data.get("messages", []))
+    state.messages.extend(msgs)
     ui.clear_screen()
     ui.console.print(f"[dim]checked out session {target} "
                      f"({len(state.messages)} messages)[/dim]")
@@ -109,12 +108,9 @@ def _cmd_checkout(args: str, state: State):
 
 @register("new-session", "Save current and start a fresh session")
 def _cmd_new_session(args: str, state: State):
-    if state.messages:
-        session.save(state.session_id, state.messages, state.model_key)
     new_id = session.next_session_id()
     state.session_id = new_id
     state.messages.clear()
-    session.save(new_id, [], state.model_key)
     ui.console.print(f"[dim]started session {new_id}[/dim]\n")
 
 
@@ -129,7 +125,7 @@ def _cmd_delete(args: str, state: State):
             ui.print_error("Cannot delete current session. Use /delete-all to wipe and reset.")
             return
         if not session.delete(target):
-            ui.print_error(f"session-{target}.json not found.")
+            ui.print_error(f"session-{target} not found.")
             return
         ui.console.print(f"[dim]deleted session {target}[/dim]\n")
         return
@@ -150,7 +146,6 @@ def _cmd_delete_all(args: str, state: State):
         session.delete(sid)
     state.messages.clear()
     state.session_id = 1
-    session.save(1, [], state.model_key)
     ui.clear_screen()
     ui.console.print(f"[dim]all sessions deleted; started session 1[/dim]\n")
 
@@ -188,6 +183,23 @@ def _cmd_agents(args: str, state: State):
         ui.console.print(f"  [cyan]{name:12}[/cyan] [dim]({spec.source}) "
                          f"maxturn={spec.maxturn} {spec.description}[/dim]")
     ui.console.print()
+
+
+@register("compact", "Manually compact context: /compact [model]")
+def _cmd_compact(args: str, state: State):
+    from agent.context.compact import compact_if_needed
+    model = args.strip() or None
+    if model and model not in config.AVAILABLE_MODELS:
+        ui.print_error(f"Unknown model '{model}'. See /model-list.")
+        return
+    ran = compact_if_needed(
+        state.session_id,
+        state.messages,
+        compact_model=model,
+        force=True,
+    )
+    if not ran:
+        ui.console.print("[dim]nothing to compact (too few turns)[/dim]\n")
 
 
 @register("subagent", "Force next task to be delegated to a subagent. Optional: /subagent <model>")

@@ -1,16 +1,25 @@
-"""Session persistence. One JSON per session in cwd/.codebot/history/."""
-import json
+"""Session ID management and metadata.
+
+Storage format is now JSONL (see messages/transcript.py).
+One file per session: .codebot/history/session-{n}.jsonl
+Offloaded tool bodies: .codebot/history/session-{n}/{tool_use_id}.txt
+"""
 import re
-from datetime import datetime
 from pathlib import Path
+
+from agent.messages.transcript import (
+    session_jsonl,
+    load_transcript,
+    _history_dir,
+)
 
 HISTORY_DIRNAME = "history"
 SESSION_PREFIX = "session-"
-_SESSION_RE = re.compile(rf"^{SESSION_PREFIX}(\d+)\.json$")
+_SESSION_RE = re.compile(rf"^{SESSION_PREFIX}(\d+)\.jsonl$")
 
 
 def history_dir() -> Path:
-    return Path.cwd() / ".codebot" / HISTORY_DIRNAME
+    return _history_dir()
 
 
 def ensure_history() -> Path:
@@ -42,45 +51,27 @@ def next_session_id() -> int:
 
 
 def session_path(session_id: int) -> Path:
-    return history_dir() / f"{SESSION_PREFIX}{session_id}.json"
+    return session_jsonl(session_id)
 
 
-def load(session_id: int) -> dict:
-    """Return parsed session dict. Raises FileNotFoundError if missing."""
-    return json.loads(session_path(session_id).read_text())
-
-
-def save(session_id: int, messages: list, model_key: str) -> None:
-    """Write session JSON. Creates history dir if needed."""
-    ensure_history()
-    p = session_path(session_id)
-    now = datetime.now().isoformat(timespec="seconds")
-
-    payload = {
-        "session_id": session_id,
-        "model_key": model_key,
-        "updated_at": now,
-        "messages": messages,
-    }
-    if not p.exists():
-        payload["created_at"] = now
-    else:
-        try:
-            existing = json.loads(p.read_text())
-            payload["created_at"] = existing.get("created_at", now)
-        except Exception:
-            payload["created_at"] = now
-
-    p.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
+def load(session_id: int) -> list:
+    """Return list of AnyMessage for the session."""
+    return load_transcript(session_id)
 
 
 def delete(session_id: int) -> bool:
-    """Remove session file. Returns True if file existed and was deleted."""
-    p = session_path(session_id)
-    if not p.exists():
-        return False
-    p.unlink()
-    return True
+    """Remove session JSONL and its offload dir. Returns True if anything was deleted."""
+    import shutil
+    deleted = False
+    p = session_jsonl(session_id)
+    if p.exists():
+        p.unlink()
+        deleted = True
+    od = history_dir() / f"session-{session_id}"
+    if od.is_dir():
+        shutil.rmtree(od)
+        deleted = True
+    return deleted
 
 
 def list_session_ids() -> list[int]:
@@ -88,16 +79,28 @@ def list_session_ids() -> list[int]:
 
 
 def list_all() -> list[dict]:
-    """Return list of session metadata for /sessions or similar."""
+    """Return session metadata for /sessions display."""
+    from agent.messages.types import AssistantMessage, SystemMessage
     out = []
     for sid in _list_session_ids():
         try:
-            data = load(sid)
+            msgs = load_transcript(sid)
+            p = session_jsonl(sid)
+            updated_at = p.stat().st_mtime if p.exists() else None
+            if updated_at:
+                from datetime import datetime
+                updated_at = datetime.fromtimestamp(updated_at).isoformat(timespec="seconds")
+            model_key = None
+            for m in msgs:
+                if isinstance(m, AssistantMessage) and not m.apierror:
+                    model_key = m.message.get("model_key")
+                    if model_key:
+                        break
             out.append({
                 "session_id": sid,
-                "model_key": data.get("model_key"),
-                "updated_at": data.get("updated_at"),
-                "msg_count": len(data.get("messages", [])),
+                "model_key": model_key or "?",
+                "updated_at": updated_at,
+                "msg_count": sum(1 for m in msgs if not isinstance(m, SystemMessage)),
             })
         except Exception:
             out.append({"session_id": sid, "error": True})

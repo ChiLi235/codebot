@@ -1,3 +1,4 @@
+import uuid
 from botocore.exceptions import ClientError, BotoCoreError
 
 from agent import client, config, ui, prompt, info, commands, session, subagent
@@ -5,6 +6,13 @@ from agent.tools import TOOLS, TOOL_MAP
 from agent.tools.guard import check_valid
 from agent.tools.human_check import check_human_eval, REJECT_MESSAGE, REJECT_MESSAGE_WITH_REASON_PREFIX
 from agent.tools.shell import categorize
+from agent.messages import (
+    UserMessage, AssistantMessage, SystemMessage,
+    normalizeMessagesForAPI, recordTranscript, load_transcript,
+)
+from agent.messages.types import AnyMessage
+from agent.context.pipeline import prepare_query
+from agent.context.budget import rebuild_decision_map
 
 
 FORCE_SUBAGENT_PREFIX = (
@@ -22,31 +30,19 @@ def _format_api_error(e: Exception) -> tuple[str, str]:
     return type(e).__name__, str(e)
 
 
-def _compact_tool_results(messages: list) -> None:
-    """Replace successful toolResult content with 'success' to shrink history.
-    Errors keep their text. Run after a turn fully ends so current turn still
-    sees full output, but next turn's context window stays small."""
-    for msg in messages:
-        if msg.get("role") != "user":
+def _rollback_to_clean(mutableMessages: list[AnyMessage]) -> None:
+    """Pop messages until last assistant has no pending tool_use, or list is empty.
+    NOTE: already-recorded JSONL lines are NOT removed — JSONL is append-only."""
+    while mutableMessages:
+        last = mutableMessages[-1]
+        if isinstance(last, UserMessage):
+            mutableMessages.pop()
             continue
-        for block in msg.get("content", []):
-            tr = block.get("toolResult")
-            if not tr:
+        if isinstance(last, AssistantMessage):
+            content = last.message.get("content", [])
+            if any("toolUse" in b for b in content):
+                mutableMessages.pop()
                 continue
-            if tr.get("status") == "success":
-                tr["content"] = [{"text": "success"}]
-
-
-def _rollback_to_clean(messages: list) -> None:
-    """Pop messages until last is assistant-text-only (no pending tool_use), or empty."""
-    while messages:
-        last = messages[-1]
-        if last["role"] == "user":
-            messages.pop()
-            continue
-        if any("toolUse" in b for b in last["content"]):
-            messages.pop()
-            continue
         return
 
 
@@ -85,15 +81,13 @@ def _print_tool_label(tu: dict) -> None:
 
 
 def _dispatch_tool_batch(tool_uses: list) -> tuple[list, bool]:
-    """Run a tool_use batch. spawn_agent calls go through the parallel dispatcher;
-    other tools run sequentially. Returns (tool_results in original order, user_denied)."""
+    """Run a tool_use batch. Returns (raw tool_result dicts, user_denied)."""
     spawn_uses = [tu for tu in tool_uses if tu["name"] == "spawn_agent"]
     other_uses = [tu for tu in tool_uses if tu["name"] != "spawn_agent"]
 
     results_by_id: dict = {}
     user_denied = False
 
-    # print labels for spawn calls before dispatch (so user sees them upfront)
     for tu in spawn_uses:
         _print_tool_label(tu)
 
@@ -113,11 +107,9 @@ def _dispatch_tool_batch(tool_uses: list) -> tuple[list, bool]:
     for tu in tool_uses:
         text, status = results_by_id[tu["toolUseId"]]
         tool_results.append({
-            "toolResult": {
-                "toolUseId": tu["toolUseId"],
-                "content": [{"text": text}],
-                "status": status,
-            }
+            "toolUseId": tu["toolUseId"],
+            "content": [{"text": text}],
+            "status": status,
         })
     return tool_results, user_denied
 
@@ -131,35 +123,41 @@ def run(model_key: str = config.DEFAULT_MODEL):
     session.ensure_history()
     latest = session.latest_session_id()
     state = commands.State(model_key=model_key, model_id=model_id)
+
     if latest is not None:
         try:
-            data = session.load(latest)
             state.session_id = latest
-            state.messages.extend(data.get("messages", []))
-            _compact_tool_results(state.messages)
+            state.messages.extend(load_transcript(latest))
             ui.console.print(f"[dim]resumed session {latest} "
                              f"({len(state.messages)} messages)[/dim]")
         except Exception:
             state.session_id = session.next_session_id()
     else:
         state.session_id = 1
-        session.save(1, [], state.model_key)
+
+    # rebuild budget decision map from loaded transcript
+    state.decision_map = rebuild_decision_map(state.messages)
 
     last_skills = info.scan_skills()
     system = prompt.build_system(tools=TOOLS)
     ui.print_header(state.model_key)
 
-    messages = state.messages
+    # mutableMessages is state.messages — the in-memory list for next turn context
+    mutableMessages = state.messages
+    last_asst_uuid: str | None = None  # tracks uuid of most recent AssistantMessage
 
-    if messages:
-        ui.render_history(messages, state.session_id)
+    if mutableMessages:
+        # seed last_asst_uuid from loaded history
+        for _m in reversed(mutableMessages):
+            if isinstance(_m, AssistantMessage):
+                last_asst_uuid = _m.uuid
+                break
+        ui.render_history(mutableMessages, state.session_id)
 
     while True:
         try:
             user_input = ui.get_input(state.session_id).strip()
         except (EOFError, KeyboardInterrupt):
-            _compact_tool_results(state.messages)
-            session.save(state.session_id, state.messages, state.model_key)
             ui.console.print("\n[dim]Bye.[/dim]")
             break
 
@@ -169,8 +167,6 @@ def run(model_key: str = config.DEFAULT_MODEL):
         ui.print_user_message(user_input, state.session_id)
 
         if user_input.lower() == "exit":
-            _compact_tool_results(state.messages)
-            session.save(state.session_id, state.messages, state.model_key)
             ui.console.print("[dim]Bye.[/dim]")
             break
 
@@ -188,27 +184,45 @@ def run(model_key: str = config.DEFAULT_MODEL):
 
         subagent.configure(state.model_id, state.model_key, force_model_id=force_model_id)
 
-        # skill state diff
+        # skill state diff — recorded as meta user message
         current_skills = info.scan_skills()
         diff_text = info.format_skills_diff(*info.diff_skills(last_skills, current_skills), current_skills)
         if diff_text:
-            messages.append({"role": "user", "content": [{"text": diff_text}]})
+            meta_msg = UserMessage(
+                message={"role": "user", "content": [{"text": diff_text}]},
+                isMeta=True,
+            )
+            mutableMessages.append(meta_msg)
+            recordTranscript(state.session_id, meta_msg)
             ui.console.print(f"[dim]{diff_text.splitlines()[0]}[/dim]")
         last_skills = current_skills
 
-        messages.append({"role": "user", "content": [{"text": user_input}]})
+        # record the human turn — parent is last assistant
+        last_user_uuid = str(uuid.uuid4())
+        user_msg = UserMessage(
+            uuid=last_user_uuid,
+            message={"role": "user", "content": [{"text": user_input}]},
+            parentUuid=last_asst_uuid,
+        )
+        mutableMessages.append(user_msg)
+        recordTranscript(state.session_id, user_msg)
 
         tool_uses: list = []
         stop_reason = "end_turn"
         text_buffer = ""
+        asst_msg_uuid = str(uuid.uuid4())
 
         ui.console.print()
         ui.print_model_label(state.model_key)
 
         api_failed = False
+        usage: dict = {}
         try:
+            query_messages = prepare_query(
+                state.session_id, mutableMessages, state.decision_map, state.model_id
+            )
             with ui.stream_response() as write:
-                for event in client.converse_stream(messages, TOOLS, system, state.model_id):
+                for event in client.converse_stream(query_messages, TOOLS, system, state.model_id):
                     if event["type"] == "text":
                         text_buffer += event["text"]
                         write(event["text"])
@@ -216,16 +230,23 @@ def run(model_key: str = config.DEFAULT_MODEL):
                         tool_uses.append(event["tool_use"])
                     elif event["type"] == "done":
                         stop_reason = event["stop_reason"]
+                        usage = event.get("usage", {})
         except KeyboardInterrupt:
             ui.print_interrupted()
             if text_buffer:
-                messages.append({"role": "assistant", "content": [{"text": text_buffer}]})
+                asst_msg = AssistantMessage(
+                    uuid=asst_msg_uuid,
+                    message={"id": asst_msg_uuid, "role": "assistant", "model": model_id,
+                             "content": [{"text": text_buffer}], "stop_reason": "interrupted"},
+                )
+                mutableMessages.append(asst_msg)
+                recordTranscript(state.session_id, asst_msg)
             subagent.clear_force_model()
             continue
         except (ClientError, BotoCoreError, Exception) as e:
             code, msg = _format_api_error(e)
             ui.print_api_error(code, msg)
-            _rollback_to_clean(messages)
+            _rollback_to_clean(mutableMessages)
             api_failed = True
 
         if api_failed:
@@ -233,6 +254,8 @@ def run(model_key: str = config.DEFAULT_MODEL):
             continue
 
         ui.console.print()
+
+        # build assistant content and record it
         assistant_content = []
         if text_buffer:
             assistant_content.append({"text": text_buffer})
@@ -242,15 +265,39 @@ def run(model_key: str = config.DEFAULT_MODEL):
                 "name": tu["name"],
                 "input": tu["input"],
             }})
+
         if assistant_content:
-            messages.append({"role": "assistant", "content": assistant_content})
+            asst_msg = AssistantMessage(
+                uuid=asst_msg_uuid,
+                parentUuid=last_user_uuid,
+                message={"id": asst_msg_uuid, "role": "assistant", "model": model_id,
+                         "content": assistant_content, "stop_reason": stop_reason},
+                inputTokens=usage.get("inputTokens"),
+                outputTokens=usage.get("outputTokens"),
+            )
+            mutableMessages.append(asst_msg)
+            recordTranscript(state.session_id, asst_msg)
+            last_asst_uuid = asst_msg_uuid
 
         # tool use loop
         iterations = 0
         while stop_reason == "tool_use" and tool_uses and iterations < config.MAX_ITERATIONS:
             iterations += 1
-            tool_results, user_denied = _dispatch_tool_batch(tool_uses)
-            messages.append({"role": "user", "content": tool_results})
+
+            raw_results, user_denied = _dispatch_tool_batch(tool_uses)
+
+            # one UserMessage per tool result; parentUuid = the toolUseId it answers
+            last_tr_uuid: str | None = None
+            for tr in raw_results:
+                tr_msg = UserMessage(
+                    message={"role": "user", "content": [{"toolResult": tr}]},
+                    toolResult=[tr],
+                    parentUuid=tr["toolUseId"],
+                    sourceToolAssistantUuid=asst_msg_uuid,
+                )
+                mutableMessages.append(tr_msg)
+                recordTranscript(state.session_id, tr_msg)
+                last_tr_uuid = tr_msg.uuid
 
             if user_denied:
                 ui.console.print("[dim]turn ended by user[/dim]\n")
@@ -259,14 +306,17 @@ def run(model_key: str = config.DEFAULT_MODEL):
             tool_uses = []
             stop_reason = "end_turn"
             text_buffer = ""
+            asst_msg_uuid = str(uuid.uuid4())
 
             ui.console.print()
             ui.print_model_label(state.model_key)
 
             inner_failed = False
+            usage = {}
             try:
+                query_messages = normalizeMessagesForAPI(mutableMessages)
                 with ui.stream_response() as write:
-                    for event in client.converse_stream(messages, TOOLS, system, state.model_id):
+                    for event in client.converse_stream(query_messages, TOOLS, system, state.model_id):
                         if event["type"] == "text":
                             text_buffer += event["text"]
                             write(event["text"])
@@ -274,19 +324,21 @@ def run(model_key: str = config.DEFAULT_MODEL):
                             tool_uses.append(event["tool_use"])
                         elif event["type"] == "done":
                             stop_reason = event["stop_reason"]
+                            usage = event.get("usage", {})
             except KeyboardInterrupt:
                 ui.print_interrupted()
                 break
             except (ClientError, BotoCoreError, Exception) as e:
                 code, msg = _format_api_error(e)
                 ui.print_api_error(code, msg)
-                _rollback_to_clean(messages)
+                _rollback_to_clean(mutableMessages)
                 inner_failed = True
 
             if inner_failed:
                 break
 
             ui.console.print()
+
             assistant_content = []
             if text_buffer:
                 assistant_content.append({"text": text_buffer})
@@ -296,10 +348,18 @@ def run(model_key: str = config.DEFAULT_MODEL):
                     "name": tu["name"],
                     "input": tu["input"],
                 }})
-            if assistant_content:
-                messages.append({"role": "assistant", "content": assistant_content})
 
-        # turn complete
+            if assistant_content:
+                asst_msg = AssistantMessage(
+                    uuid=asst_msg_uuid,
+                    parentUuid=last_tr_uuid,
+                    message={"id": asst_msg_uuid, "role": "assistant", "model": model_id,
+                             "content": assistant_content, "stop_reason": stop_reason},
+                    inputTokens=usage.get("inputTokens"),
+                    outputTokens=usage.get("outputTokens"),
+                )
+                mutableMessages.append(asst_msg)
+                recordTranscript(state.session_id, asst_msg)
+                last_asst_uuid = asst_msg_uuid
+
         subagent.clear_force_model()
-        _compact_tool_results(state.messages)
-        session.save(state.session_id, state.messages, state.model_key)

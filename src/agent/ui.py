@@ -62,15 +62,28 @@ def print_response_end(full_text: str):
 
 
 def render_history(messages: list, session_id: int | None = None):
-    """Replay saved messages (user text, assistant text/tool calls). Tool results skipped."""
+    """Replay saved AnyMessage list. Tool results and meta messages skipped."""
+    from agent.messages.types import UserMessage, AssistantMessage, SystemMessage
     for msg in messages:
-        role = msg.get("role")
-        content = msg.get("content", [])
-        if role == "user":
-            for block in content:
-                if "text" in block:
-                    print_user_message(block["text"], session_id)
-        elif role == "assistant":
+        if isinstance(msg, SystemMessage):
+            continue
+        if isinstance(msg, UserMessage):
+            if msg.isMeta or msg.toolResult or msg.isCompactSummary:
+                continue
+            content = msg.message.get("content", [])
+            if isinstance(content, str):
+                if content:
+                    print_user_message(content, session_id)
+            else:
+                for block in content:
+                    if "text" in block:
+                        print_user_message(block["text"], session_id)
+        elif isinstance(msg, AssistantMessage):
+            if msg.apierror:
+                continue
+            content = msg.message.get("content", [])
+            if isinstance(content, str):
+                content = [{"text": content}] if content else []
             text_parts = [b["text"] for b in content if "text" in b]
             tool_parts = [b["toolUse"] for b in content if "toolUse" in b]
             if text_parts:
