@@ -264,8 +264,11 @@ def get_input(session_id: int | None = None) -> str:
     """Blocking prompt with history support. Raises EOFError/KeyboardInterrupt."""
     label = f"\n[{session_id}] > " if session_id is not None else "\n> "
     text = _session.prompt(label, style=_prompt_style)
-    # erase the live-prompt line; we re-echo as a styled bar via print_user_message
-    print("\033[F\033[K", end="", flush=True)
+    # erase all wrapped lines of the prompt before re-echoing via print_user_message
+    visible_label = label.lstrip("\n")
+    term_width = console.width or 80
+    lines = max(1, -(-( len(visible_label) + len(text)) // term_width))  # ceiling div
+    print("\033[F\033[K" * lines, end="", flush=True)
     return text
 
 

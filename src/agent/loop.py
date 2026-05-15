@@ -4,7 +4,7 @@ from botocore.exceptions import ClientError, BotoCoreError
 from agent import client, config, ui, prompt, info, commands, session, subagent
 from agent.tools import TOOLS, TOOL_MAP
 from agent.tools.guard import check_valid
-from agent.tools.human_check import check_human_eval, REJECT_MESSAGE, REJECT_MESSAGE_WITH_REASON_PREFIX
+from agent.tools.human_check import check_human_eval
 from agent.tools.shell import categorize
 from agent.messages import (
     UserMessage, AssistantMessage, SystemMessage,
@@ -46,27 +46,27 @@ def _rollback_to_clean(mutableMessages: list[AnyMessage]) -> None:
         return
 
 
-def _process_single_tool(tu: dict) -> tuple[str, str, bool]:
-    """Run guard + human approval + tool. Returns (text, status, user_denied)."""
+def _process_single_tool(tu: dict) -> tuple[str, str, bool, str | None]:
+    """Run guard + human approval + tool. Returns (text, status, user_denied, instruction)."""
     name = tu["name"]
     fn = TOOL_MAP.get(name)
     if fn is None:
-        return f"Error: unknown tool '{name}'", "error", False
+        return f"Error: unknown tool '{name}'", "error", False, None
 
     guard_err = check_valid(name, tu["input"].get("path"), tu["input"].get("command"))
     if guard_err:
-        return guard_err, "error", False
+        return guard_err, "error", False, None
 
     verdict, instr = check_human_eval(name, tu["input"])
     if verdict == "denied":
-        return REJECT_MESSAGE, "error", True
+        return "Cancelled", "error", True, None
     if verdict == "instructed":
-        return REJECT_MESSAGE_WITH_REASON_PREFIX + (instr or ""), "error", False
+        return "Cancelled", "error", False, instr or ""
 
     try:
-        return fn(**tu["input"]), "success", False
+        return fn(**tu["input"]), "success", False, None
     except Exception as e:
-        return f"Error: {e}", "error", False
+        return f"Error: {e}", "error", False, None
 
 
 def _print_tool_label(tu: dict) -> None:
@@ -80,13 +80,14 @@ def _print_tool_label(tu: dict) -> None:
     ui.print_tool_call(name, preview[:80], category)
 
 
-def _dispatch_tool_batch(tool_uses: list) -> tuple[list, bool]:
-    """Run a tool_use batch. Returns (raw tool_result dicts, user_denied)."""
+def _dispatch_tool_batch(tool_uses: list) -> tuple[list, bool, str | None]:
+    """Run a tool_use batch. Returns (raw tool_result dicts, user_denied, instruction_text)."""
     spawn_uses = [tu for tu in tool_uses if tu["name"] == "spawn_agent"]
     other_uses = [tu for tu in tool_uses if tu["name"] != "spawn_agent"]
 
     results_by_id: dict = {}
     user_denied = False
+    instruction: str | None = None
 
     for tu in spawn_uses:
         _print_tool_label(tu)
@@ -97,9 +98,14 @@ def _dispatch_tool_batch(tool_uses: list) -> tuple[list, bool]:
             results_by_id[tuid] = pair
 
     for tu in other_uses:
-        text, status, denied = _process_single_tool(tu)
+        if user_denied or instruction is not None:
+            results_by_id[tu["toolUseId"]] = ("Cancelled", "error")
+            continue
+        text, status, denied, instr = _process_single_tool(tu)
         if denied:
             user_denied = True
+        if instr is not None:
+            instruction = instr
         _print_tool_label(tu)
         results_by_id[tu["toolUseId"]] = (text, status)
 
@@ -111,7 +117,7 @@ def _dispatch_tool_batch(tool_uses: list) -> tuple[list, bool]:
             "content": [{"text": text}],
             "status": status,
         })
-    return tool_results, user_denied
+    return tool_results, user_denied, instruction
 
 
 def run(model_key: str = config.DEFAULT_MODEL):
@@ -284,7 +290,7 @@ def run(model_key: str = config.DEFAULT_MODEL):
         while stop_reason == "tool_use" and tool_uses and iterations < config.MAX_ITERATIONS:
             iterations += 1
 
-            raw_results, user_denied = _dispatch_tool_batch(tool_uses)
+            raw_results, user_denied, instruction = _dispatch_tool_batch(tool_uses)
 
             # one UserMessage per tool result; parentUuid = the toolUseId it answers
             last_tr_uuid: str | None = None
@@ -302,6 +308,19 @@ def run(model_key: str = config.DEFAULT_MODEL):
             if user_denied:
                 ui.console.print("[dim]turn ended by user[/dim]\n")
                 break
+
+            if instruction is not None:
+                # bundle instruction as text alongside cancelled tool results;
+                # normalizeMessagesForAPI merges consecutive UserMessages into one
+                # API turn: [tool_result A: Cancelled, tool_result B: Cancelled, text: ...]
+                instr_msg = UserMessage(
+                    message={"role": "user", "content": [{"text": instruction}]},
+                    parentUuid=last_tr_uuid,
+                )
+                mutableMessages.append(instr_msg)
+                recordTranscript(state.session_id, instr_msg)
+                last_tr_uuid = instr_msg.uuid
+                ui.print_user_message(instruction, state.session_id)
 
             tool_uses = []
             stop_reason = "end_turn"
