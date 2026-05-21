@@ -93,5 +93,11 @@ def check_human_eval(action: str, params: dict) -> tuple[str, str | None]:
     if reason is None:
         return ("approved", None)
 
+    diff_lines: list[str] = []
+    diff_path: str = ""
+    if action in WRITE_TOOLS:
+        from agent.diff import compute_preview_diff
+        diff_lines, diff_path = compute_preview_diff(action, params)
+
     detail = params.get("command") or params.get("path") or ""
-    return ui.ask_approval(action, reason, detail)
+    return ui.ask_approval(action, reason, detail, diff_lines, diff_path)

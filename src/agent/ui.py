@@ -13,6 +13,7 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.layout import Layout, HSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.document import Document
 
 console = Console(highlight=False)
 
@@ -28,7 +29,23 @@ MODEL_DISPLAY_NAMES = {
 }
 
 _prompt_style = Style.from_dict({"prompt": "bold"})
-_session = PromptSession(history=InMemoryHistory(), style=_prompt_style)
+
+_input_kb = KeyBindings()
+
+@_input_kb.add("c-u")
+def _clear_input(event):
+    event.app.current_buffer.set_document(Document(), bypass_readonly=True)
+
+@_input_kb.add("c-a")
+def _go_line_start(event):
+    event.app.current_buffer.cursor_position = 0
+
+@_input_kb.add("c-e")
+def _go_line_end(event):
+    buf = event.app.current_buffer
+    buf.cursor_position = len(buf.text)
+
+_session = PromptSession(history=InMemoryHistory(), style=_prompt_style, key_bindings=_input_kb)
 
 
 def get_display_name(model_key: str) -> str:
@@ -245,6 +262,11 @@ def print_tool_call(name: str, preview: str, category: str = "unknown"):
     console.print(f"[dim]  ⚙ [bold]{label}[/bold] {preview}[/dim]")
 
 
+def print_diff(diff_lines: list[str], filepath: str) -> None:
+    from agent.diff import render_diff
+    render_diff(diff_lines, filepath, console)
+
+
 def print_error(msg: str):
     console.print(f"[red]Error:[/red] {msg}")
 
@@ -330,24 +352,108 @@ def _arrow_select(options: list[str]) -> int | None:
     return app.run()
 
 
-def ask_approval(action: str, reason: str, detail: str) -> tuple[str, str | None]:
+def ask_approval(
+    action: str,
+    reason: str,
+    detail: str,
+    diff_lines: list[str] | None = None,
+    diff_path: str = "",
+) -> tuple[str, str | None]:
     """
     Show approval prompt with arrow-key selection.
+    When diff_lines provided, renders an expandable diff above the selector.
     Returns ('approved', None) | ('denied', None) | ('instructed', text).
     """
-    console.print()
-    console.print(Panel(
-        f"[bold yellow]⚠ Approval required[/bold yellow]\n"
-        f"[bold]Tool:[/bold] {action}\n"
-        f"[bold]Reason:[/bold] {reason}\n"
-        f"[bold]Detail:[/bold]\n[white]{detail}[/white]",
-        border_style="yellow",
-        padding=(0, 2),
-    ))
-    console.print("[dim]↑↓ to navigate · enter to select · esc to cancel[/dim]")
-
+    MAX_COLLAPSED = 8
     options = ["Yes — approve", "No — deny", "Tell something else"]
-    idx = _arrow_select(options)
+
+    console.print()
+
+    if diff_lines:
+        selected = [0]
+        expanded = [False]
+        has_more = len(diff_lines) > MAX_COLLAPSED
+
+        def _render_diff():
+            rows = []
+            rows.append(("bold", f"  {diff_path}\n"))
+            display = diff_lines if expanded[0] else diff_lines[:MAX_COLLAPSED]
+            for raw in display:
+                line = raw.rstrip("\n")
+                if line.startswith("@@"):
+                    rows.append(("ansicyan", f"  {line}\n"))
+                elif line.startswith("-"):
+                    rows.append(("ansired", f"  {line}\n"))
+                elif line.startswith("+"):
+                    rows.append(("ansigreen", f"  {line}\n"))
+                else:
+                    rows.append(("", f"  {line}\n"))
+            if has_more:
+                hidden = len(diff_lines) - MAX_COLLAPSED
+                if not expanded[0]:
+                    rows.append(("ansiyellow", f"  … {hidden} more lines\n"))
+                else:
+                    rows.append(("ansiyellow", "  [c to collapse]\n"))
+            rows.append(("bold ansiyellow", f"\n  ⚠ {action}  "))
+            rows.append(("ansiyellow", f"{reason}\n\n"))
+            for i, opt in enumerate(options):
+                if i == selected[0]:
+                    rows.append(("bold ansicyan", f"  ❯ {opt}\n"))
+                else:
+                    rows.append(("#888888", f"    {opt}\n"))
+            hint = "  ↑↓ navigate · enter select"
+            if has_more:
+                hint += " · e expand" if not expanded[0] else " · c collapse"
+            hint += " · esc cancel\n"
+            rows.append(("", hint))
+            return rows
+
+        kb = KeyBindings()
+
+        @kb.add("up")
+        @kb.add("c-p")
+        def _up(event):
+            selected[0] = (selected[0] - 1) % len(options)
+
+        @kb.add("down")
+        @kb.add("c-n")
+        def _down(event):
+            selected[0] = (selected[0] + 1) % len(options)
+
+        @kb.add("e")
+        def _expand(event):
+            if has_more:
+                expanded[0] = True
+
+        @kb.add("c")
+        def _collapse(event):
+            expanded[0] = False
+
+        @kb.add("enter")
+        def _confirm(event):
+            event.app.exit(result=selected[0])
+
+        @kb.add("c-c")
+        @kb.add("escape")
+        def _cancel(event):
+            event.app.exit(result=None)
+
+        layout = Layout(HSplit([
+            Window(FormattedTextControl(_render_diff), always_hide_cursor=True),
+        ]))
+        app = Application(layout=layout, key_bindings=kb, full_screen=False, mouse_support=False)
+        idx = app.run()
+    else:
+        console.print(Panel(
+            f"[bold yellow]⚠ Approval required[/bold yellow]\n"
+            f"[bold]Tool:[/bold] {action}\n"
+            f"[bold]Reason:[/bold] {reason}\n"
+            f"[bold]Detail:[/bold]\n[white]{detail}[/white]",
+            border_style="yellow",
+            padding=(0, 2),
+        ))
+        console.print("[dim]↑↓ to navigate · enter to select · esc to cancel[/dim]")
+        idx = _arrow_select(options)
 
     if idx is None or idx == 1:
         console.print("[red]denied[/red]\n")

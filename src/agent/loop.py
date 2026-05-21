@@ -64,9 +64,11 @@ def _process_single_tool(tu: dict) -> tuple[str, str, bool, str | None]:
         return "Cancelled", "error", False, instr or ""
 
     try:
-        return fn(**tu["input"]), "success", False, None
+        result = fn(**tu["input"])
     except Exception as e:
         return f"Error: {e}", "error", False, None
+
+    return result, "success", False, None
 
 
 def _print_tool_label(tu: dict) -> None:
