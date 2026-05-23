@@ -34,6 +34,33 @@ def _with_retry(fn, max_retries: int = 5):
             delay = min(delay * 2, 30)
 
 
+def _supports_cache(model_id: str) -> bool:
+    return "anthropic.claude" in model_id
+
+
+def _cached_system(system: list) -> list:
+    return list(system) + [{"cachePoint": {"type": "default"}}]
+
+
+def _cached_tool_config(tools: list) -> dict:
+    return {"tools": list(tools) + [{"cachePoint": {"type": "default"}}]}
+
+
+def _cached_messages(messages: list) -> list:
+    if not messages:
+        return messages
+    result = list(messages)
+    for i in reversed(range(len(result))):
+        if result[i].get("role") == "user":
+            msg = dict(result[i])
+            content = list(msg.get("content", []))
+            content.append({"cachePoint": {"type": "default"}})
+            msg["content"] = content
+            result[i] = msg
+            break
+    return result
+
+
 def converse(messages: list, tools: list, system: list, model_id: str,
              max_tokens: int | None = None) -> dict:
     client = _get_client()
@@ -55,6 +82,11 @@ def converse(messages: list, tools: list, system: list, model_id: str,
 def converse_stream(messages: list, tools: list, system: list, model_id: str):
     """Yield reconstructed stream events: text chunks and complete tool_use blocks."""
     client = _get_client()
+
+    if _supports_cache(model_id):
+        system = _cached_system(system)
+        messages = _cached_messages(messages)
+
     kwargs = dict(
         modelId=model_id,
         messages=messages,
@@ -62,7 +94,7 @@ def converse_stream(messages: list, tools: list, system: list, model_id: str):
         inferenceConfig={"maxTokens": config.MAX_TOKENS},
     )
     if tools:
-        kwargs["toolConfig"] = {"tools": tools}
+        kwargs["toolConfig"] = _cached_tool_config(tools) if _supports_cache(model_id) else {"tools": tools}
 
     def _call():
         return client.converse_stream(**kwargs)

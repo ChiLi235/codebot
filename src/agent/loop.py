@@ -71,6 +71,13 @@ def _process_single_tool(tu: dict) -> tuple[str, str, bool, str | None]:
     return result, "success", False, None
 
 
+def _print_cache_stats(usage: dict) -> None:
+    read = usage.get("cacheReadInputTokens", 0)
+    write = usage.get("cacheWriteInputTokens", 0)
+    if read or write:
+        ui.console.print(f"[dim]cache: read={read} write={write}[/dim]")
+
+
 def _print_tool_label(tu: dict) -> None:
     name = tu["name"]
     if name == "spawn_agent":
@@ -239,6 +246,7 @@ def run(model_key: str = config.DEFAULT_MODEL):
                     elif event["type"] == "done":
                         stop_reason = event["stop_reason"]
                         usage = event.get("usage", {})
+                        _print_cache_stats(usage)
         except KeyboardInterrupt:
             ui.print_interrupted()
             if text_buffer:
@@ -346,6 +354,7 @@ def run(model_key: str = config.DEFAULT_MODEL):
                         elif event["type"] == "done":
                             stop_reason = event["stop_reason"]
                             usage = event.get("usage", {})
+                            _print_cache_stats(usage)
             except KeyboardInterrupt:
                 ui.print_interrupted()
                 break
