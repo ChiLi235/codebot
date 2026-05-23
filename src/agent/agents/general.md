@@ -1,7 +1,7 @@
 ---
 name: general
 description: Autonomous general-purpose agent with full toolset (read, write, edit, bash, search, skills).
-allowed: *
+allowed: \*
 disallowed: spawn_agent
 maxturn: 0
 model: deepseek
