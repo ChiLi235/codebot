@@ -1,7 +1,8 @@
 import uuid
 from botocore.exceptions import ClientError, BotoCoreError
 
-from agent import client, config, ui, prompt, info, commands, session, subagent
+from agent import client, config, ui, prompt, info, commands, session, subagent, skills
+from agent.memory import get_memory_dir, fire_extract, recall_memories, MemoryStore, MemoryCursor
 from agent.tools import TOOLS, TOOL_MAP
 from agent.tools.guard import check_valid
 from agent.tools.human_check import check_human_eval
@@ -153,7 +154,13 @@ def run(model_key: str = config.DEFAULT_MODEL):
     # rebuild budget decision map from loaded transcript
     state.decision_map = rebuild_decision_map(state.messages)
 
-    last_skills = info.scan_skills()
+    # memory subsystem — cursor persists across sessions
+    _mem_dir = get_memory_dir()
+    MemoryStore(_mem_dir).ensure_dir()
+    _mem_cursor = MemoryCursor(_mem_dir)
+    _mem_cursor.load()
+
+    last_skills = skills.scan_skills()
     system = prompt.build_system(tools=TOOLS)
     ui.print_header(state.model_key)
 
@@ -200,8 +207,8 @@ def run(model_key: str = config.DEFAULT_MODEL):
         subagent.configure(state.model_id, state.model_key, force_model_id=force_model_id)
 
         # skill state diff — recorded as meta user message
-        current_skills = info.scan_skills()
-        diff_text = info.format_skills_diff(*info.diff_skills(last_skills, current_skills), current_skills)
+        current_skills = skills.scan_skills()
+        diff_text = skills.format_skills_diff(*skills.diff_skills(last_skills, current_skills), current_skills)
         if diff_text:
             meta_msg = UserMessage(
                 message={"role": "user", "content": [{"text": diff_text}]},
@@ -212,11 +219,23 @@ def run(model_key: str = config.DEFAULT_MODEL):
             ui.console.print(f"[dim]{diff_text.splitlines()[0]}[/dim]")
         last_skills = current_skills
 
+        # recall relevant memories and append to user turn as system-reminder
+        _recalled = recall_memories(user_input)
+        if _recalled:
+            _recall_block = "\n\n---\n\n".join(_recalled)
+            _turn_text = (
+                f"{user_input}\n\n"
+                f"<system-reminder>\n{_recall_block}\n</system-reminder>"
+            )
+            ui.console.print(f"[dim]recalled {len(_recalled)} memory file(s)[/dim]")
+        else:
+            _turn_text = user_input
+
         # record the human turn — parent is last assistant
         last_user_uuid = str(uuid.uuid4())
         user_msg = UserMessage(
             uuid=last_user_uuid,
-            message={"role": "user", "content": [{"text": user_input}]},
+            message={"role": "user", "content": [{"text": _turn_text}]},
             parentUuid=last_asst_uuid,
         )
         mutableMessages.append(user_msg)
@@ -392,4 +411,6 @@ def run(model_key: str = config.DEFAULT_MODEL):
                 recordTranscript(state.session_id, asst_msg)
                 last_asst_uuid = asst_msg_uuid
 
+        # fire background memory extraction — non-blocking, daemon thread
+        fire_extract(mutableMessages, _mem_cursor)
         subagent.clear_force_model()
