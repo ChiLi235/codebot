@@ -45,6 +45,13 @@ def make_tool_specs() -> list:
             {"filename": S, "old_str": S, "new_str": S},
             ["filename", "old_str", "new_str"],
         ),
+        _spec(
+            "delete_memory_file",
+            "Delete a memory file. Use when renaming (write new file first, then delete old) "
+            "or when a memory is fully superseded and no longer applies.",
+            {"filename": S},
+            ["filename"],
+        ),
     ]
 
 
@@ -60,4 +67,6 @@ def dispatch(tu: dict, store: MemoryStore) -> str:
         return store.edit_file(
             inp.get("filename", ""), inp.get("old_str", ""), inp.get("new_str", "")
         )
+    if name == "delete_memory_file":
+        return store.delete_file(inp.get("filename", ""))
     return f"Error: unknown tool '{name}'"

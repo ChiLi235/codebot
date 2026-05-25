@@ -67,12 +67,28 @@ One line per file. No file content, just the pointer:
 ```
 - [Title](filename.md) — one-line hook
 ```
-Always update MEMORY.md when you add or modify a file.
+Always update MEMORY.md when you add, rename, or delete a file.
+
+## Renaming files
+
+When a memory's meaning changes significantly and the current filename is misleading,
+rename it — do NOT just edit the content and leave a lying filename.
+
+Rename sequence (3 steps, one turn):
+1. `write_memory_file` with the new filename and updated content
+2. `delete_memory_file` on the old filename
+3. `edit_memory_file` on MEMORY.md to replace the old entry with the new one
+
+Example: `feedback_english_only.md` → user switches to Chinese preference
+→ write `feedback_language_chinese.md` with new content
+→ delete `feedback_english_only.md`
+→ update MEMORY.md entry
 
 ## Efficiency strategy
 
 **Turn 1:** Call read_memory_file for every file you might update. Never write before reading.
-**Turn 2:** Write all changes — write_memory_file for new files, edit_memory_file for edits.
+**Turn 2:** Write all changes — write_memory_file for new/renamed files, edit_memory_file for
+edits, delete_memory_file for old files being replaced.
 Max 5 tool turns total. If nothing is worth saving, stop immediately without calling tools.
 
 Prefer updating an existing file over creating a near-duplicate.

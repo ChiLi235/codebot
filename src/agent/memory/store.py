@@ -73,6 +73,15 @@ class MemoryStore:
         p.write_text(content.replace(old_str, new_str, 1))
         return f"Edited {filename}"
 
+    def delete_file(self, filename: str) -> str:
+        p = self._safe_path(filename)
+        if p is None:
+            return f"Error: '{filename}' is outside memory directory"
+        if not p.exists():
+            return f"Error: '{filename}' not found"
+        p.unlink()
+        return f"Deleted {filename}"
+
     def scan_files(self) -> list[dict]:
         """Return [{filename, description}] parsed from frontmatter of each .md file."""
         if not self.memory_dir.exists():
