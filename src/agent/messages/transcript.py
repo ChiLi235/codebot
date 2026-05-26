@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .types import AnyMessage
+from .types import AnyMessage, SystemMessage
 from .serde import to_dict, from_dict
 
 
@@ -41,7 +41,11 @@ def recordTranscript(session_id: int, message: AnyMessage) -> None:
 
 
 def load_transcript(session_id: int) -> list[AnyMessage]:
-    """Read all messages from the JSONL file. Skips corrupt lines silently."""
+    """Read messages from the JSONL file. Skips corrupt lines silently.
+
+    If a compact_boundary exists, only messages from the last boundary onward
+    are returned — pre-compact history is intentionally discarded.
+    """
     path = session_jsonl(session_id)
     if not path.exists():
         return []
@@ -54,4 +58,11 @@ def load_transcript(session_id: int) -> list[AnyMessage]:
             messages.append(from_dict(json.loads(raw)))
         except Exception:
             pass
-    return messages
+
+    # find last compact_boundary — discard everything before it
+    last_boundary = -1
+    for i, m in enumerate(messages):
+        if isinstance(m, SystemMessage) and getattr(m, "subtype", None) == "compact_boundary":
+            last_boundary = i
+
+    return messages[last_boundary:] if last_boundary >= 0 else messages

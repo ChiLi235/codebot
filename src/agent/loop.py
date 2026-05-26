@@ -160,6 +160,8 @@ def run(model_key: str = config.DEFAULT_MODEL):
     _mem_cursor = MemoryCursor(_mem_dir)
     _mem_cursor.load()
 
+    ui.init_history(state.session_id)
+
     last_skills = skills.scan_skills()
     system = prompt.build_system(tools=TOOLS)
     ui.print_header(state.model_key)

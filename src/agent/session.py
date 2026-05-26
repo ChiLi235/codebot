@@ -71,6 +71,10 @@ def delete(session_id: int) -> bool:
     if od.is_dir():
         shutil.rmtree(od)
         deleted = True
+    ih = history_dir() / "input" / f"session_{session_id}"
+    if ih.exists():
+        ih.unlink()
+        deleted = True
     return deleted
 
 

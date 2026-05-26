@@ -8,7 +8,8 @@ from rich.panel import Panel
 from rich.markdown import Markdown
 from rich.live import Live
 from prompt_toolkit import PromptSession, Application
-from prompt_toolkit.history import InMemoryHistory
+from prompt_toolkit.history import FileHistory, InMemoryHistory
+from pathlib import Path
 from prompt_toolkit.styles import Style
 from prompt_toolkit.layout import Layout, HSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
@@ -45,7 +46,27 @@ def _go_line_end(event):
     buf = event.app.current_buffer
     buf.cursor_position = len(buf.text)
 
+class _FilteredFileHistory(FileHistory):
+    """FileHistory that skips slash-commands (/model, /help, etc.)."""
+    def store_string(self, string: str) -> None:
+        if not string.startswith("/"):
+            super().store_string(string)
+
+
 _session = PromptSession(history=InMemoryHistory(), style=_prompt_style, key_bindings=_input_kb)
+
+
+def init_history(session_id: int) -> None:
+    """Switch _session to per-session FileHistory. Call after session_id is known."""
+    global _session
+    hist_dir = Path.cwd() / ".codebot" / "history" / "input"
+    hist_dir.mkdir(parents=True, exist_ok=True)
+    hist_file = hist_dir / f"session_{session_id}"
+    _session = PromptSession(
+        history=_FilteredFileHistory(str(hist_file)),
+        style=_prompt_style,
+        key_bindings=_input_kb,
+    )
 
 
 def get_display_name(model_key: str) -> str:

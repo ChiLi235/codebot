@@ -4,7 +4,7 @@ Keeps last MICROCOMPACT_KEEP_TURNS complete turns intact.
 A "complete turn" = one non-meta human UserMessage + everything after it up
 to (but not including) the next non-meta human UserMessage.
 
-Target tools (bulky output): Read, Bash, Grep, Glob, WebSearch, WebFetch, Edit, Write.
+Target tools (bulky output): read_file, bash, grep, glob, edit_file, write_file.
 NOT cleared: Task results, user text, assistant thinking.
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ from agent.messages.types import AnyMessage, SystemMessage, UserMessage
 
 BULKY_TOOL_NAMES = {
     "read_file", "bash", "grep", "glob",
-    "web_search", "web_fetch", "edit_file", "write_file",
+    "edit_file", "write_file",
 }
 
 _CLEARED = "[Old tool result content cleared]"
