@@ -9,7 +9,7 @@ from agent.tools.human_check import check_human_eval
 from agent.tools.shell import categorize
 from agent.messages import (
     UserMessage, AssistantMessage, SystemMessage,
-    normalizeMessagesForAPI, recordTranscript, load_transcript,
+    normalizeMessagesForAPI, recordTranscript, load_transcript, record_token_usage,
 )
 from agent.messages.types import AnyMessage
 from agent.context.pipeline import prepare_query
@@ -166,7 +166,6 @@ def run(model_key: str = config.DEFAULT_MODEL):
     system = prompt.build_system(tools=TOOLS)
     ui.print_header(state.model_key)
 
-    # mutableMessages is state.messages — the in-memory list for next turn context
     mutableMessages = state.messages
     last_asst_uuid: str | None = None  # tracks uuid of most recent AssistantMessage
 
@@ -268,6 +267,8 @@ def run(model_key: str = config.DEFAULT_MODEL):
                         stop_reason = event["stop_reason"]
                         usage = event.get("usage", {})
                         _print_cache_stats(usage)
+            if usage:
+                record_token_usage(state.session_id, usage, asst_msg_uuid, model_id)
         except KeyboardInterrupt:
             ui.print_interrupted()
             if text_buffer:
@@ -292,7 +293,6 @@ def run(model_key: str = config.DEFAULT_MODEL):
 
         ui.console.print()
 
-        # build assistant content and record it
         assistant_content = []
         if text_buffer:
             assistant_content.append({"text": text_buffer})
@@ -384,6 +384,9 @@ def run(model_key: str = config.DEFAULT_MODEL):
                 ui.print_api_error(code, msg)
                 _rollback_to_clean(mutableMessages)
                 inner_failed = True
+
+            if usage:
+                record_token_usage(state.session_id, usage, asst_msg_uuid, model_id)
 
             if inner_failed:
                 break

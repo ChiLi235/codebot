@@ -50,6 +50,7 @@ Type these inside the chat:
 | Command | Description |
 |---------|-------------|
 | `/model <key>` | Switch model mid-session |
+|`/help`|See all available commands|
 | `exit` | Quit |
 
 ## AWS setup

@@ -1,7 +1,7 @@
 from .types import UserMessage, AssistantMessage, SystemMessage, AnyMessage
 from .normalize import normalizeMessagesForAPI
 from .serde import to_dict, from_dict
-from .transcript import recordTranscript, load_transcript, session_jsonl, offload_dir
+from .transcript import recordTranscript, load_transcript, session_jsonl, offload_dir, record_token_usage
 
 __all__ = [
     "UserMessage",
@@ -15,4 +15,5 @@ __all__ = [
     "load_transcript",
     "session_jsonl",
     "offload_dir",
+    "record_token_usage",
 ]

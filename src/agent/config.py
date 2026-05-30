@@ -10,7 +10,7 @@ MAX_PARALLEL_SUBAGENTS = 4
 AVAILABLE_MODELS = {
     "sonnet": "us.anthropic.claude-sonnet-4-6",
     "haiku": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    "opus": "anthropic.claude-opus-4-7",
+    "opus-4.8": "us.anthropic.claude-opus-4-8",
     "opus-4.6": "us.anthropic.claude-opus-4-6-v1",
 
     "nova-pro": "us.amazon.nova-pro-v1:0",

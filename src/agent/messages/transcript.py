@@ -40,6 +40,26 @@ def recordTranscript(session_id: int, message: AnyMessage) -> None:
         f.write(line + "\n")
 
 
+def token_usage_path(session_id: int) -> Path:
+    return _history_dir() / f"token_usage_{session_id}.json"
+
+
+def record_token_usage(session_id: int, usage: dict, turn_uuid: str, model: str) -> None:
+    """Append one token usage record as a JSON line. Never mutates existing lines."""
+    ensure_session(session_id)
+    record = {
+        "timestamp": __import__("datetime").datetime.now().isoformat(timespec="milliseconds"),
+        "turn_uuid": turn_uuid,
+        "model": model,
+        "inputTokens": usage.get("inputTokens", 0),
+        "outputTokens": usage.get("outputTokens", 0),
+        "cacheReadInputTokens": usage.get("cacheReadInputTokens", 0),
+        "cacheWriteInputTokens": usage.get("cacheWriteInputTokens", 0),
+    }
+    with token_usage_path(session_id).open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
 def load_transcript(session_id: int) -> list[AnyMessage]:
     """Read messages from the JSONL file. Skips corrupt lines silently.
 

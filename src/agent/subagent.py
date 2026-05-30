@@ -7,6 +7,7 @@ import threading
 from botocore.exceptions import ClientError, BotoCoreError
 
 from agent import client, config, info, ui
+from agent import skills
 
 
 # ── data ──────────────────────────────────────────────────────────────────────
@@ -142,11 +143,11 @@ def spawn_agent(subagent_type: str, prompt: str, description: str = "",
 
     parts = [spec.prompt, info.format_tools_text(tools_list)]
     if spec.skills:
-        injected = info.load_skills(spec.skills)
+        injected = skills.load_skills(spec.skills)
         if injected:
-            parts.append(info.format_skills_text(injected))
+            parts.append(skills.format_skills_text(injected))
     if "list_skills" in tool_map:
-        idx = info.format_skills_listing(info.scan_skills_meta())
+        idx = skills.format_skills_listing(skills.scan_skills_meta())
         if idx:
             parts.append(idx)
     system = [{"text": "\n\n---\n\n".join(parts)}]
@@ -182,14 +183,13 @@ def _run_subagent_loop(messages: list, tools_list: list, tool_map: dict,
 
     # initial call
     try:
-        with _ui_lock:
-            for event in client.converse_stream(messages, tools_list, system, model_id):
-                if event["type"] == "text":
-                    text_buffer += event["text"]
-                elif event["type"] == "tool_use":
-                    tool_uses.append(event["tool_use"])
-                elif event["type"] == "done":
-                    stop_reason = event["stop_reason"]
+        for event in client.converse_stream(messages, tools_list, system, model_id):
+            if event["type"] == "text":
+                text_buffer += event["text"]
+            elif event["type"] == "tool_use":
+                tool_uses.append(event["tool_use"])
+            elif event["type"] == "done":
+                stop_reason = event["stop_reason"]
     except (ClientError, BotoCoreError, Exception) as e:
         code, msg = _format_api_error(e)
         return f"Error: subagent '{name}' failed: {code} {msg}"
@@ -257,14 +257,13 @@ def _run_subagent_loop(messages: list, tools_list: list, tool_map: dict,
         text_buffer = ""
 
         try:
-            with _ui_lock:
-                for event in client.converse_stream(messages, tools_list, system, model_id):
-                    if event["type"] == "text":
-                        text_buffer += event["text"]
-                    elif event["type"] == "tool_use":
-                        tool_uses.append(event["tool_use"])
-                    elif event["type"] == "done":
-                        stop_reason = event["stop_reason"]
+            for event in client.converse_stream(messages, tools_list, system, model_id):
+                if event["type"] == "text":
+                    text_buffer += event["text"]
+                elif event["type"] == "tool_use":
+                    tool_uses.append(event["tool_use"])
+                elif event["type"] == "done":
+                    stop_reason = event["stop_reason"]
         except (ClientError, BotoCoreError, Exception) as e:
             code, msg = _format_api_error(e)
             return f"Error: subagent '{name}' failed mid-loop: {code} {msg}"

@@ -1,7 +1,7 @@
 from agent.tools.files import read_file, write_file, edit_file, list_directory
 from agent.tools.search import grep, glob_files
 from agent.tools.shell import bash
-from agent.tools.skill import load_skill, list_skills
+from agent.skills import tool_load_skill as load_skill, tool_list_skills as list_skills
 
 
 def _spawn_agent(*args, **kwargs):
