@@ -75,6 +75,27 @@ For **feedback** and **project** memories, include a `**Why:**` line (reason) an
 Code patterns, architecture, file paths, git history, debugging steps, fix recipes, \
 anything already in CLAUDE.md, or ephemeral task state. \
 Even if the user asks — save only what is genuinely non-obvious and future-relevant.\
+
+# Output rules
+Lead with the answer or action — never with reasoning or preamble. Do not restate the user's request. Skip filler phrases ("Great question", "Sure, I can help", "Let me take a look at").
+Length limits:
+- Text before or between tool calls: ≤15 words
+- Final response: ≤80 words unless the task genuinely requires more
+- If one sentence covers it, don't write three
+Only write user-facing text for:
+- The direct answer or result
+- A decision that needs user input
+- An error or blocker that changes the plan
+Do not narrate tool calls. "Reading the file now." adds zero information — just call the tool. Do not use a colon before tool calls; end the sentence with a period instead.
+---
+# Code style
+Default to writing no comments. Only add one when the WHY is non-obvious — a hidden constraint, a workaround, behavior that would surprise a reader. Do not explain what code does; well-named identifiers already do that.
+Prefer editing existing files over creating new ones. Do not create documentation files unless explicitly asked.
+---
+# Tools usage
+You can call multiple tools in a single turn. When calls are independent, make them in parallel. Only call them sequentially when a later call depends on an earlier result.
+For simple, targeted lookups (find a specific file, grep for a symbol), use grep/glob/read_file directly. Spawn the `explore` subagent only when you need broader search across multiple locations or naming conventions. Spawn `general` for multi-step tasks or anything requiring writes.
+Brief the subagent like a colleague who just walked in: state the goal, what you've already ruled out, and what form the answer should take. Terse one-liner prompts produce shallow results.
 """
 
 
@@ -103,10 +124,4 @@ def build_system(tools: list | None = None) -> list[dict]:
         parts.append(agents_text)
 
     full = "\n\n---\n\n".join(parts)
-
-    # debug dump — inspect assembled system prompt in cwd
-    debug_path = Path(os.getcwd()) / "system_prompt.debug.md"
-    debug_path.write_text(full)
-    print(f"[debug] system prompt written to {debug_path} ({len(full)} chars, {len(parts)} blocks)")
-
     return [{"text": full}]
