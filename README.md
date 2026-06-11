@@ -36,12 +36,15 @@ uv run codebot --model haiku
 
 | Key | Model |
 |-----|-------|
-| `sonnet` | Claude Sonnet (default) |
+| `deepseek` | DeepSeek V4 Flash (default, own API) |
+| `deepseek-pro` | DeepSeek V4 Pro (own API) |
+| `sonnet` | Claude Sonnet |
 | `haiku` | Claude Haiku |
 | `opus` | Claude Opus |
 | `nova-pro` | Amazon Nova Pro |
 | `nova-lite` | Amazon Nova Lite |
-| `deepseek` | DeepSeek V3 |
+
+`deepseek` and `deepseek-pro` call DeepSeek's own API directly (not Bedrock) — set `DEEPSEEK_API_KEY` in a `.env` file in the project root.
 
 ## Commands
 

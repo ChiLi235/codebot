@@ -24,7 +24,8 @@ MODEL_DISPLAY_NAMES = {
     "opus":      "Claude Opus",
     "nova-pro":  "Amazon Nova Pro",
     "nova-lite": "Amazon Nova Lite",
-    "deepseek":  "DeepSeek",
+    "deepseek":  "DeepSeek V4 Flash",
+    "deepseek-pro": "DeepSeek V4 Pro",
     "chatgpt-120b": "ChatGPT OSS 120B",
     "chatgpt-20b":"ChatGPT OSS 20b",
 }
@@ -94,6 +95,11 @@ def print_response_chunk(text: str):
     console.print(text, end="", markup=False, highlight=False)
 
 
+def print_thinking_chunk(text: str):
+    """Dim, unrendered passthrough for reasoning-model chain-of-thought tokens."""
+    console.print(text, end="", markup=False, highlight=False, style="dim")
+
+
 def print_response_end(full_text: str):
     """Re-render completed response as markdown."""
     console.print()
@@ -157,7 +163,17 @@ def stream_response():
     - Re-rendering growing text from scratch on every chunk (old bug → flicker)
     - live.stop()/start() cycling (old bug → visual chaos)
     - Raw text leaking to scrollback (old bug → duplication)
+
+    On a non-tty (eg. piped/headless run), Rich's Live can't do in-place
+    redraws — fall back to a plain passthrough writer.
     """
+    if not console.is_terminal:
+        def _write(chunk: str):
+            console.print(chunk, end="", markup=False, highlight=False)
+        yield _write
+        console.print()
+        return
+
     line_buf = ""               # current partial line (not yet newline-terminated)
     block_buf: list[str] = []   # lines buffered for multi-line blocks
     in_fence = False             # inside a ``` code fence

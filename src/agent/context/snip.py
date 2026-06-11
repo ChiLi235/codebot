@@ -174,6 +174,7 @@ def run_snip_pipeline_step(
             tools=[_SNIP_TOOL],
             system=[{"text": _SNIP_SYSTEM}],
             model_id=snip_model_id,
+            thinking="disabled",
         )
         output  = response.get("output", {}).get("message", {})
         content = output.get("content", [])

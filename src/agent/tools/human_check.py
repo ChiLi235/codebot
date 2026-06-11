@@ -22,7 +22,41 @@ READ_TOOLS  = {"read_file", "list_directory", "grep"}
 
 _SAFE_BASH = SEARCH_COMMANDS | READ_COMMANDS | LIST_COMMANDS | NEUTRAL_COMMANDS
 
+# subcommands matching these names always require approval, even with
+# auto-approve on — wrong path/flag here is irreversible
+_ALWAYS_CONFIRM_BASH = {
+    "rm", "rmdir", "dd", "mkfs", "shred", "truncate",
+    "chmod", "chown", "kill", "pkill", "killall",
+    "shutdown", "reboot", "halt", "poweroff",
+}
+
 _WRITE_REDIRECT_RE = re.compile(r'(?<![<>])(>|>>)(?!&)')
+
+# global toggle set via /switch-access; default = always allow (TB 2.0 runs)
+_auto_approve = True
+
+# set once at startup for non-interactive runs (eg. Terminal-Bench harness) —
+# bypasses ALL approval, including rm-class commands and outside-cwd reads,
+# since ui.ask_approval() can't prompt without a tty
+_headless = False
+
+
+def get_auto_approve() -> bool:
+    return _auto_approve
+
+
+def set_auto_approve(value: bool) -> None:
+    global _auto_approve
+    _auto_approve = value
+
+
+def get_headless() -> bool:
+    return _headless
+
+
+def set_headless(value: bool) -> None:
+    global _headless
+    _headless = value
 
 
 def _first_token(sub: str) -> str:
@@ -54,6 +88,11 @@ def _bash_needs_approval(cmd: str) -> str | None:
     return None
 
 
+def _has_dangerous_command(cmd: str) -> bool:
+    subcmds = [s for s in re.split(r'[|&;]', cmd) if s.strip()]
+    return any(_first_token(s) in _ALWAYS_CONFIRM_BASH for s in subcmds)
+
+
 def _is_outside_cwd(path: str) -> bool:
     cwd = Path.cwd().resolve()
     p = Path(path).expanduser()
@@ -70,11 +109,22 @@ def _is_outside_cwd(path: str) -> bool:
 
 def needs_approval(action: str, params: dict) -> str | None:
     """Return reason string if approval needed, None otherwise."""
-    if action in WRITE_TOOLS:
-        return f"write to {params.get('path', '?')}"
+    if _headless:
+        return None
 
     if action == "bash":
-        return _bash_needs_approval(params.get("command", ""))
+        cmd = params.get("command", "")
+        if _has_dangerous_command(cmd):
+            return "potentially destructive command"
+        reason = _bash_needs_approval(cmd)
+        if reason is None:
+            return None
+        return None if _auto_approve else reason
+
+    if action in WRITE_TOOLS:
+        if _auto_approve:
+            return None
+        return f"write to {params.get('path', '?')}"
 
     if action in READ_TOOLS:
         path = params.get("path")

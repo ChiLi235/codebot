@@ -141,6 +141,7 @@ def _call_summary_llm(messages_text: str, model_key: str) -> str:
                 system=[{"text": system_text}],
                 model_id=model_id,
                 max_tokens=token_target,
+                thinking="disabled",
             )
             stop_reason = response.get("stopReason", "end_turn")
             output      = response.get("output", {}).get("message", {})

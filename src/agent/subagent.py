@@ -137,9 +137,7 @@ def spawn_agent(subagent_type: str, prompt: str, description: str = "",
     tools_list, tool_map = resolve_tools(spec, effective_depth)
     model_id = (_active.get("force_model_id")
                 or config.AVAILABLE_MODELS.get(spec.model or "")
-                or _active["model_id"])
-    if not model_id:
-        return "Error: no model_id resolved for subagent (subagent.configure not called?)"
+                or config.AVAILABLE_MODELS[config.DEFAULT_SUBAGENT_MODEL])
 
     parts = [spec.prompt, info.format_tools_text(tools_list)]
     if spec.skills:

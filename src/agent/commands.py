@@ -202,6 +202,15 @@ def _cmd_compact(args: str, state: State):
         ui.console.print("[dim]nothing to compact (too few turns)[/dim]\n")
 
 
+@register("switch-access", "Toggle write/bash approval: always-ask <-> always-allow (rm-class commands always confirm)")
+def _cmd_switch_access(args: str, state: State):
+    from agent.tools.human_check import get_auto_approve, set_auto_approve
+    new_mode = not get_auto_approve()
+    set_auto_approve(new_mode)
+    label = "always-allow" if new_mode else "always-ask"
+    ui.console.print(f"[dim]access mode: {label}[/dim]\n")
+
+
 @register("subagent", "Force next task to be delegated to a subagent. Optional: /subagent <model>")
 def _cmd_subagent(args: str, state: State):
     if args:
