@@ -194,6 +194,7 @@ def _run_turn(
     tool_uses: list = []
     stop_reason = "end_turn"
     text_buffer = ""
+    thinking_buffer = ""
     asst_msg_uuid = str(uuid.uuid4())
 
     ui.console.print()
@@ -210,6 +211,7 @@ def _run_turn(
             for event in client.converse_stream(query_messages, TOOLS, system, state.model_id):
                 if event["type"] == "thinking":
                     thinking = True
+                    thinking_buffer += event["text"]
                     ui.print_thinking_chunk(event["text"])
                 elif event["type"] == "text":
                     if thinking:
@@ -252,6 +254,8 @@ def _run_turn(
     assistant_content = []
     if text_buffer:
         assistant_content.append({"text": text_buffer})
+    elif thinking_buffer and not tool_uses:
+        assistant_content.append({"text": thinking_buffer})
     for tu in tool_uses:
         assistant_content.append({"toolUse": {
             "toolUseId": tu["toolUseId"],
@@ -312,6 +316,7 @@ def _run_turn(
         tool_uses = []
         stop_reason = "end_turn"
         text_buffer = ""
+        thinking_buffer = ""
         asst_msg_uuid = str(uuid.uuid4())
 
         ui.console.print()
@@ -326,6 +331,7 @@ def _run_turn(
                 for event in client.converse_stream(query_messages, TOOLS, system, state.model_id):
                     if event["type"] == "thinking":
                         thinking = True
+                        thinking_buffer += event["text"]
                         ui.print_thinking_chunk(event["text"])
                     elif event["type"] == "text":
                         if thinking:
@@ -359,6 +365,8 @@ def _run_turn(
         assistant_content = []
         if text_buffer:
             assistant_content.append({"text": text_buffer})
+        elif thinking_buffer and not tool_uses:
+            assistant_content.append({"text": thinking_buffer})
         for tu in tool_uses:
             assistant_content.append({"toolUse": {
                 "toolUseId": tu["toolUseId"],
