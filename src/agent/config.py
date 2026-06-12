@@ -5,7 +5,7 @@ load_dotenv()
 
 AWS_PROFILE = os.environ.get("AWS_PROFILE", "default")
 REGION = os.environ.get("AWS_REGION", "us-east-1")
-MAX_TOKENS = 8096
+MAX_TOKENS = 40000
 MAX_ITERATIONS = 50
 SUBAGENT_MAX_ITERATIONS = 30
 MAX_PARALLEL_SUBAGENTS = 4
